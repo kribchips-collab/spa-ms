@@ -50,7 +50,8 @@ def init_db():
         item_beaver INTEGER DEFAULT 0,
         item_tea INTEGER DEFAULT 0,
         sword INTEGER DEFAULT 0,
-        crab_time INTEGER DEFAULT 0
+        crab_time INTEGER DEFAULT 0,
+        chat_id INTEGER DEFAULT 0
     )
     """)
     db.commit()
@@ -60,14 +61,24 @@ def init_db():
     needed = [
         ("loan_time", "INTEGER DEFAULT 0"), ("loan_amount", "INTEGER DEFAULT 0"),
         ("item_beaver", "INTEGER DEFAULT 0"), ("item_tea", "INTEGER DEFAULT 0"),
-        ("sword", "INTEGER DEFAULT 0"), ("crab_time", "INTEGER DEFAULT 0")
+        ("sword", "INTEGER DEFAULT 0"), ("crab_time", "INTEGER DEFAULT 0"),
+        ("chat_id", "INTEGER DEFAULT 0") # НОВАЯ КОЛОНКА
     ]
     for col_name, col_type in needed:
         if col_name not in columns:
             cursor.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
     db.commit()
 
-init_db()
+def get_user(user_id):
+    cursor.execute("SELECT * FROM users WHERE id=?", (user_id,))
+    user = cursor.fetchone()
+    if user is None:
+        # Добавили еще один 0 в конец для chat_id (теперь 17 значений вместо 16)
+        user_data = (user_id, 0, "Мой СПА", "🧖", None, 0, 1, 1, 0, "", 0, 0, 0, 0, 0, 0, 0)
+        cursor.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", user_data)
+        db.commit()
+        return user_data
+    return user
 
 # ---------- ДАННЫЕ ИГРЫ ----------
 REVIEWS = {
@@ -290,34 +301,62 @@ async def handle_shop_logic(update: Update, data: str):
     else:
         await update.callback_query.message.edit_text("💰 Недостаточно денег!", reply_markup=menu())
 # ---------- ОБРАБОТКА ТЕКСТА ----------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    user = get_user(user_id)
+    
+    # Запоминаем чат при команде /start
+    cursor.execute("UPDATE users SET chat_id=? WHERE id=?", (chat_id, user_id))
+    db.commit()
+    
+    await update.message.reply_text(menu_text(user), reply_markup=menu())
+
+# ---------- ОБРАБОТКА ТЕКСТА ----------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    text = update.message.text.strip()
+    
+    user = get_user(user_id)
+    
+    # Запоминаем чат при любом текстовом сообщении юзера
+    cursor.execute("UPDATE users SET chat_id=? WHERE id=?", (chat_id, user_id))
+    db.commit()
+
     if context.user_data.get("custom"):
-        new_name = update.message.text.strip()
         emojis = ["🦀", "🐻", "🦁", "🐬", "🦑", "🐹", "🧖"]
-        found_emoji = next((c for c in new_name if c in emojis), "🧖")
-        clean_name = "".join([c for c in new_name if c not in emojis]).strip()
-        
-        # СТАВИМ ЛИМИТ В 15 СИМВОЛОВ:
+        found_emoji = next((c for c in text if c in emojis), "🧖")
+        clean_name = "".join([c for c in text if c not in emojis]).strip()
         clean_name = clean_name[:15]
         
-        cursor.execute("UPDATE users SET spa_name=?, emoji=? WHERE id=?", (clean_name or "СПА", found_emoji, update.effective_user.id))
+        cursor.execute("UPDATE users SET spa_name=?, emoji=? WHERE id=?", (clean_name or "СПА", found_emoji, user_id))
         db.commit()
         context.user_data["custom"] = False
         await update.message.reply_text("✅ Название обновлено!", reply_markup=menu())
+        return
 
+    # Вызов меню на слово "спа" (в любом регистре: Спа, СПА, спа)
+    if text.lower() == "спа":
+        await update.message.reply_text(menu_text(get_user(user_id)), reply_markup=menu())
 # ---------- ФОНОВЫЙ ЧЕКЕР ----------
 async def client_checker(context: ContextTypes.DEFAULT_TYPE):
     now = int(time.time())
-    cursor.execute("SELECT id, loan_time, loan_amount FROM users WHERE loan_amount > 0")
-    for u_id, l_t, l_a in cursor.fetchall():
+    
+    # Проверка долгов
+    cursor.execute("SELECT id, loan_time, loan_amount, chat_id FROM users WHERE loan_amount > 0")
+    for u_id, l_t, l_a, chat_id in cursor.fetchall():
         if now - l_t >= 14400:
             cursor.execute("UPDATE users SET money=money-?, loan_amount=0 WHERE id=?", (l_a, u_id))
             db.commit()
-            try: await context.bot.send_message(u_id, "📢 Срок долга истек! Списано 100💰.")
+            
+            target = chat_id if chat_id else u_id # Если chat_id есть, пишем туда, иначе в личку
+            try: await context.bot.send_message(target, "📢 Срок долга истек! Списано 100💰.")
             except: pass
 
-    cursor.execute("SELECT id, client_time, client, heater_status FROM users WHERE client IS NOT NULL")
-    for u_id, c_t, c_names, h_s in cursor.fetchall():
+    # Проверка клиентов
+    cursor.execute("SELECT id, client_time, client, heater_status, chat_id FROM users WHERE client IS NOT NULL")
+    for u_id, c_t, c_names, h_s, chat_id in cursor.fetchall():
         if now - c_t >= 300:
             pay = 0
             for c in c_names.split(","):
@@ -332,7 +371,9 @@ async def client_checker(context: ContextTypes.DEFAULT_TYPE):
                 cursor.execute("UPDATE users SET client=NULL WHERE id=?", (u_id,))
                 msg = "❌ Гости ушли недовольными из-за холодной воды!"
             db.commit()
-            try: await context.bot.send_message(u_id, msg)
+            
+            target = chat_id if chat_id else u_id
+            try: await context.bot.send_message(target, msg)
             except: pass
 
 # ---------- ЗАПУСК ----------
@@ -347,4 +388,5 @@ if __name__ == "__main__":
 
     print("Бот успешно запущен!")
     app.run_polling()
+
 
