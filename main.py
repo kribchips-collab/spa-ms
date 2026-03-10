@@ -24,14 +24,6 @@ TOKEN = "8799074728:AAHgmUBmEr4NXX8w8mpyZMS8epPWDzQoWBg"
 CLIENTS = ["Бобр", "Герокс", "Редик", "Вебер", "Криб"]
 
 # ---------- БАЗА ДАННЫХ ----------
-db_folder = os.path.join("app", "data")
-if not os.path.exists(db_folder):
-    os.makedirs(db_folder)
-
-db_path = os.path.join(db_folder, "spa.db")
-db = sqlite3.connect(db_path, check_same_thread=False)
-cursor = db.cursor()
-
 def init_db():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users(
@@ -51,7 +43,8 @@ def init_db():
         item_tea INTEGER DEFAULT 0,
         sword INTEGER DEFAULT 0,
         crab_time INTEGER DEFAULT 0,
-        chat_id INTEGER DEFAULT 0
+        chat_id INTEGER DEFAULT 0,
+        closed_until INTEGER DEFAULT 0
     )
     """)
     db.commit()
@@ -62,7 +55,7 @@ def init_db():
         ("loan_time", "INTEGER DEFAULT 0"), ("loan_amount", "INTEGER DEFAULT 0"),
         ("item_beaver", "INTEGER DEFAULT 0"), ("item_tea", "INTEGER DEFAULT 0"),
         ("sword", "INTEGER DEFAULT 0"), ("crab_time", "INTEGER DEFAULT 0"),
-        ("chat_id", "INTEGER DEFAULT 0") # НОВАЯ КОЛОНКА
+        ("chat_id", "INTEGER DEFAULT 0"), ("closed_until", "INTEGER DEFAULT 0") # ДОБАВЛЕНО
     ]
     for col_name, col_type in needed:
         if col_name not in columns:
@@ -73,9 +66,9 @@ def get_user(user_id):
     cursor.execute("SELECT * FROM users WHERE id=?", (user_id,))
     user = cursor.fetchone()
     if user is None:
-        # Добавили еще один 0 в конец для chat_id (теперь 17 значений вместо 16)
-        user_data = (user_id, 0, "Мой СПА", "🧖", None, 0, 1, 1, 0, "", 0, 0, 0, 0, 0, 0, 0)
-        cursor.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", user_data)
+        # Теперь тут 18 значений
+        user_data = (user_id, 0, "Мой СПА", "🧖", None, 0, 1, 1, 0, "", 0, 0, 0, 0, 0, 0, 0, 0)
+        cursor.execute("INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", user_data)
         db.commit()
         return user_data
     return user
@@ -120,7 +113,11 @@ def menu_text(user):
     now = int(time.time())
     heater = "✅ работает" if user[6] else "❌ сломан"
     
-    if user[15] > now:
+    # ПРОВЕРКА НА ЗАКРЫТИЕ ЗА ДОЛГИ
+    if user[17] > now:
+        timeLeft = (user[17] - now) // 60
+        status = f"🛑 ЗАКРЫТО ЗА ДОЛГИ ({max(1, timeLeft)} мин)"
+    elif user[15] > now:
         timeLeft = (user[15] - now) // 60
         status = f"🦀 ЗАХВАЧЕНО КРАБАМИ ({max(0, timeLeft)} мин)"
     elif user[4]:
@@ -201,10 +198,14 @@ async def handle_spa_logic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(user_id)
     now = int(time.time())
 
+    # НЕ ПУСКАЕМ, ЕСЛИ ЗАКРЫТО ЗА ДОЛГИ
+    if user[17] > now:
+        await query.message.edit_text(menu_text(user) + "\n\n🛑 СПА опечатан за долги! Ждите снятия ареста.", reply_markup=menu())
+        return
+
     if user[15] > now:
         await query.message.edit_text(menu_text(user) + "\n\n🦀 КРАБЫ! Ждите завершения осады.", reply_markup=menu())
         return
-
     if random.random() < 0.025:
         if user[14] == 1:
             cursor.execute("UPDATE users SET sword=0 WHERE id=?", (user_id,))
@@ -340,6 +341,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.lower() == "спа":
         await update.message.reply_text(menu_text(get_user(user_id)), reply_markup=menu())
 # ---------- ФОНОВЫЙ ЧЕКЕР ----------
+# ---------- ФОНОВЫЙ ЧЕКЕР ----------
 async def client_checker(context: ContextTypes.DEFAULT_TYPE):
     now = int(time.time())
     
@@ -347,12 +349,15 @@ async def client_checker(context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("SELECT id, loan_time, loan_amount, chat_id FROM users WHERE loan_amount > 0")
     for u_id, l_t, l_a, chat_id in cursor.fetchall():
         if now - l_t >= 14400:
-            cursor.execute("UPDATE users SET money=money-?, loan_amount=0 WHERE id=?", (l_a, u_id))
+            # Списываем долг и ставим таймер закрытия СПА на 600 секунд (10 минут)
+            ban_time = now + 600
+            cursor.execute("UPDATE users SET money=money-?, loan_amount=0, closed_until=? WHERE id=?", (l_a, ban_time, u_id))
             db.commit()
             
-            target = chat_id if chat_id else u_id # Если chat_id есть, пишем туда, иначе в личку
-            try: await context.bot.send_message(target, "📢 Срок долга истек! Списано 100💰.")
+            target = chat_id if chat_id else u_id
+            try: await context.bot.send_message(target, "📢 Срок долга истек! Списано 100💰. Ваш СПА опечатан приставами на 10 минут!")
             except: pass
+
 
     # Проверка клиентов
     cursor.execute("SELECT id, client_time, client, heater_status, chat_id FROM users WHERE client IS NOT NULL")
@@ -388,5 +393,6 @@ if __name__ == "__main__":
 
     print("Бот успешно запущен!")
     app.run_polling()
+
 
 
