@@ -18,8 +18,8 @@ from telegram.ext import (
     filters
 )
 
-# СЮДА ВСТАВЬ ТОКЕН
-TOKEN = "8799074728:AAFViAkeJqe0P5-LX1cp2cX6ZfoOi69ZHDo"
+# СЮДА ВСТАВЬ НОВЫЙ ТОКЕН (Старый засвечен, сбрось его в BotFather!)
+TOKEN = "8799074728:AAHgmUBmEr4NXX8w8mpyZMS8epPWDzQoWBg"
 
 CLIENTS = ["Бобр", "Герокс", "Редик", "Вебер", "Криб"]
 
@@ -55,7 +55,6 @@ def init_db():
     """)
     db.commit()
 
-    # Проверка и добавление недостающих колонок (миграция)
     cursor.execute("PRAGMA table_info(users)")
     columns = [col[1] for col in cursor.fetchall()]
     needed = [
@@ -106,12 +105,13 @@ def menu():
     return InlineKeyboardMarkup(keyboard)
 
 def menu_text(user):
+    if not user: return "Ошибка загрузки данных."
     now = int(time.time())
     heater = "✅ работает" if user[6] else "❌ сломан"
     
     if user[15] > now:
         timeLeft = (user[15] - now) // 60
-        status = f"🦀 ЗАХВАЧЕНО КРАБАМИ ({timeLeft} мин)"
+        status = f"🦀 ЗАХВАЧЕНО КРАБАМИ ({max(0, timeLeft)} мин)"
     elif user[4]:
         status = f"👤 В гостях: {user[4].replace(',', ', ')}"
     else:
@@ -136,10 +136,13 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     data = query.data
+    user = get_user(user_id) # Загружаем юзера сразу
     
-    # Мгновенно убираем часики загрузки
     try: await query.answer()
     except: pass
+
+    if not user:
+        return # Если юзер не нашелся, ничего не делаем
 
     if data == "spa":
         await handle_spa_logic(update, context)
@@ -152,28 +155,21 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "custom":
         context.user_data["custom"] = True
         await query.message.edit_text("Введите новое название вашего салона!:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅ Назад", callback_data="back")]]))
-    # Замени код внутри кнопки reviews на этот:
     elif data == "reviews":
-        user = get_user(user_id)
-        # Берем список отзывов и перекраиваем его (только последние 5)
         all_reviews = list(REVIEWS.values())
-        recent_reviews = all_reviews[-5:] # Берет последние 5 элементов
-        
+        recent_reviews = all_reviews[-5:]
         txt = f"💬 Последние отзывы:\n\n" + "\n\n".join(recent_reviews)
         await query.message.edit_text(txt, reply_markup=menu())
     elif data == "heater":
-        user = get_user(user_id)
         status = "✅ работает" if user[6] else "❌ сломан. Почините в магазине!"
         await query.message.edit_text(f"🔥 Нагреватель: {status}", reply_markup=menu())
     elif data == "achievements":
-        user = get_user(user_id)
         u_achs = user[9].split(",") if user[9] else []
         txt = "🎖 Ваши достижения:\n\n"
         for k, a in ACHIEVEMENTS.items():
             txt += f"{'✅' if k in u_achs else '❌'} {a['title']} — {a['desc']}\n"
         await query.message.edit_text(txt, reply_markup=menu())
     elif data == "get_loan":
-        user = get_user(user_id)
         now = int(time.time())
         if user[11] > 0: await query.message.edit_text(menu_text(user)+"\n❌ Долг уже активен!", reply_markup=menu())
         elif now - user[10] < 86400 and user[10] != 0: await query.message.edit_text(menu_text(user)+"\n❌ Можно брать раз в сутки!", reply_markup=menu())
@@ -197,16 +193,15 @@ async def handle_spa_logic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(menu_text(user) + "\n\n🦀 КРАБЫ! Ждите завершения осады.", reply_markup=menu())
         return
 
-    # Шанс 2.5% на крабов
     if random.random() < 0.025:
-        if user[14] == 1: # Есть меч
+        if user[14] == 1:
             cursor.execute("UPDATE users SET sword=0 WHERE id=?", (user_id,))
             db.commit()
-            await query.message.edit_text(menu_text(get_user(user_id)) + "\n\n⚔️ ПАЛУНДРА! Крабы напали, но вы уничтожили их мечом! Салон спасен, меч сломан.", reply_markup=menu())
+            await query.message.edit_text(menu_text(get_user(user_id)) + "\n\n⚔️ ПАЛУНДРА! Крабы напали, но вы уничтожили их мечом!", reply_markup=menu())
         else:
             cursor.execute("UPDATE users SET crab_time=? WHERE id=?", (now + 1800, user_id))
             db.commit()
-            await query.message.edit_text(menu_text(get_user(user_id)) + "\n\n🦀 ПАЛУНДРА! Крабы захватили салон на 30 минут! Нужен был меч...", reply_markup=menu())
+            await query.message.edit_text(menu_text(get_user(user_id)) + "\n\n🦀 ПАЛУНДРА! Крабы захватили салон на 30 минут!", reply_markup=menu())
         return
 
     if user[4] is not None:
@@ -244,7 +239,8 @@ async def handle_shop_logic(update: Update, data: str):
         await update.callback_query.message.edit_text(menu_text(user), reply_markup=menu())
         return
 
-    price = {"fix_heater": 25, "buy_bath": 50, "buy_beaver": 150, "buy_tea": 200, "buy_sword": 300}.get(data, 999999)
+    price_map = {"fix_heater": 25, "buy_bath": 50, "buy_beaver": 150, "buy_tea": 200, "buy_sword": 300}
+    price = price_map.get(data, 999999)
     
     if user[1] >= price:
         if data == "fix_heater": cursor.execute("UPDATE users SET money=money-25, heater_status=1 WHERE id=?", (u_id,))
@@ -272,7 +268,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- ФОНОВЫЙ ЧЕКЕР ----------
 async def client_checker(context: ContextTypes.DEFAULT_TYPE):
     now = int(time.time())
-    # Долги
     cursor.execute("SELECT id, loan_time, loan_amount FROM users WHERE loan_amount > 0")
     for u_id, l_t, l_a in cursor.fetchall():
         if now - l_t >= 14400:
@@ -281,7 +276,6 @@ async def client_checker(context: ContextTypes.DEFAULT_TYPE):
             try: await context.bot.send_message(u_id, "📢 Срок долга истек! Списано 100💰.")
             except: pass
 
-    # Клиенты
     cursor.execute("SELECT id, client_time, client, heater_status FROM users WHERE client IS NOT NULL")
     for u_id, c_t, c_names, h_s in cursor.fetchall():
         if now - c_t >= 300:
@@ -290,6 +284,7 @@ async def client_checker(context: ContextTypes.DEFAULT_TYPE):
                 if "Бобёр" in c: pay += 150
                 elif "Незнакомец" in c: pay += 200
                 else: pay += 50
+            
             if h_s:
                 cursor.execute("UPDATE users SET money=money+?, client=NULL WHERE id=?", (pay, u_id))
                 msg = f"✅ Гости ушли и заплатили {pay}💰!"
@@ -301,11 +296,14 @@ async def client_checker(context: ContextTypes.DEFAULT_TYPE):
             except: pass
 
 # ---------- ЗАПУСК ----------
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(buttons))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-app.job_queue.run_repeating(client_checker, interval=30)
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(buttons))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    
+    if app.job_queue:
+        app.job_queue.run_repeating(client_checker, interval=30)
 
-print("Бот успешно запущен!")
-app.run_polling()
+    print("Бот успешно запущен!")
+    app.run_polling()
