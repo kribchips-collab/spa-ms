@@ -183,6 +183,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_shop_logic(update, data)
 
 # ---------- ЛОГИКА СПА И КРАБОВ ----------
+# ---------- ЛОГИКА СПА И КРАБОВ ----------
 async def handle_spa_logic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
@@ -209,16 +210,35 @@ async def handle_spa_logic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     clients = []
+    available_clients = CLIENTS.copy() # Копия списка, чтобы удалять из неё и не допускать дублей
+
     for _ in range(user[7]):
         roll = random.random()
-        if user[12] == 1 and roll < 0.20: clients.append("🦫 Большой Бобёр")
-        elif user[13] == 1 and roll < 0.15: clients.append("🔮 Аметистовый Незнакомец")
-        else: clients.append(random.choice(CLIENTS))
+        if user[12] == 1 and roll < 0.20 and "🦫 Большой Бобёр" not in clients:
+            clients.append("🦫 Большой Бобёр")
+        elif user[13] == 1 and roll < 0.15 and "🔮 Аметистовый Незнакомец" not in clients:
+            clients.append("🔮 Аметистовый Незнакомец")
+        elif available_clients: # Если остались обычные клиенты
+            chosen = random.choice(available_clients)
+            clients.append(chosen)
+            available_clients.remove(chosen) # Удаляем, чтобы не пришел дважды
+
+    # ПРОВЕРКА ДОСТИЖЕНИЯ: honeymoon (Медовый Месяц)
+    u_achs = user[9].split(",") if user[9] else []
+    ach_msg = ""
+    if "Герокс" in clients and "Криб" in clients and "honeymoon" not in u_achs:
+        u_achs.append("honeymoon")
+        cursor.execute("UPDATE users SET achievements=? WHERE id=?", (",".join(u_achs), user_id))
+        ach_msg = "\n\n🏆 Получено достижение: Медовый Месяц!"
 
     cursor.execute("UPDATE users SET client=?, client_time=? WHERE id=?", (",".join(clients), now, user_id))
     db.commit()
-    await query.message.edit_text(menu_text(get_user(user_id)) + f"\n\n✨ Гости зашли: {', '.join(clients)}", reply_markup=menu())
+    
+    # Обновляем данные юзера, чтобы меню отобразилось корректно
+    updated_user = get_user(user_id) 
+    await query.message.edit_text(menu_text(updated_user) + f"\n\n✨ Гости зашли: {', '.join(clients)}{ach_msg}", reply_markup=menu())
 
+# ---------- МАГАЗИН ----------
 # ---------- МАГАЗИН ----------
 async def show_shop(update: Update):
     user = get_user(update.callback_query.from_user.id)
@@ -243,16 +263,32 @@ async def handle_shop_logic(update: Update, data: str):
     price = price_map.get(data, 999999)
     
     if user[1] >= price:
-        if data == "fix_heater": cursor.execute("UPDATE users SET money=money-25, heater_status=1 WHERE id=?", (u_id,))
+        ach_msg = ""
+        if data == "fix_heater": 
+            # Чиним и прибавляем счетчик починок (+1)
+            cursor.execute("UPDATE users SET money=money-25, heater_status=1, repair_count=repair_count+1 WHERE id=?", (u_id,))
+            db.commit()
+            
+            # ПРОВЕРКА ДОСТИЖЕНИЯ: handyman (Мастер на все руки)
+            updated_user = get_user(u_id)
+            u_achs = updated_user[9].split(",") if updated_user[9] else []
+            if updated_user[8] >= 10 and "handyman" not in u_achs:
+                u_achs.append("handyman")
+                cursor.execute("UPDATE users SET achievements=? WHERE id=?", (",".join(u_achs), u_id))
+                db.commit()
+                ach_msg = "\n\n🏆 Получено достижение: Мастер на все руки!"
+                
         elif data == "buy_bath": cursor.execute("UPDATE users SET money=money-50, bath_count=2 WHERE id=?", (u_id,))
         elif data == "buy_beaver": cursor.execute("UPDATE users SET money=money-150, item_beaver=1 WHERE id=?", (u_id,))
         elif data == "buy_tea": cursor.execute("UPDATE users SET money=money-200, item_tea=1 WHERE id=?", (u_id,))
         elif data == "buy_sword": cursor.execute("UPDATE users SET money=money-300, sword=1 WHERE id=?", (u_id,))
-        db.commit()
-        await update.callback_query.message.edit_text("✅ Успешно куплено!", reply_markup=menu())
+        
+        if data != "fix_heater":
+            db.commit()
+            
+        await update.callback_query.message.edit_text(f"✅ Успешно куплено!{ach_msg}", reply_markup=menu())
     else:
         await update.callback_query.message.edit_text("💰 Недостаточно денег!", reply_markup=menu())
-
 # ---------- ОБРАБОТКА ТЕКСТА ----------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("custom"):
@@ -260,6 +296,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         emojis = ["🦀", "🐻", "🦁", "🐬", "🦑", "🐹", "🧖"]
         found_emoji = next((c for c in new_name if c in emojis), "🧖")
         clean_name = "".join([c for c in new_name if c not in emojis]).strip()
+        
+        # СТАВИМ ЛИМИТ В 15 СИМВОЛОВ:
+        clean_name = clean_name[:15]
+        
         cursor.execute("UPDATE users SET spa_name=?, emoji=? WHERE id=?", (clean_name or "СПА", found_emoji, update.effective_user.id))
         db.commit()
         context.user_data["custom"] = False
@@ -307,3 +347,4 @@ if __name__ == "__main__":
 
     print("Бот успешно запущен!")
     app.run_polling()
+
