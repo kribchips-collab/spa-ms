@@ -198,27 +198,27 @@ async def handle_spa_logic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = get_user(user_id)
     now = int(time.time())
 
-    # НЕ ПУСКАЕМ, ЕСЛИ ЗАКРЫТО ЗА ДОЛГИ
+    # Вспомогательная функция для безопасного редактирования
+    async def safe_edit(text):
+        try:
+            await query.message.edit_text(text, reply_markup=menu())
+        except telegram.error.BadRequest as e:
+            if "Message is not modified" not in str(e):
+                raise e # Если ошибка не связана с дубликатом текста, пробрасываем её дальше
+
+    # Проверка на арест за долги
     if user[17] > now:
-        await query.message.edit_text(menu_text(user) + "\n\n🛑 СПА опечатан за долги! Ждите снятия ареста.", reply_markup=menu())
+        await safe_edit(menu_text(user) + "\n\n🛑 СПА опечатан за долги! Ждите снятия ареста.")
         return
 
+    # Проверка на крабов
     if user[15] > now:
-        await query.message.edit_text(menu_text(user) + "\n\n🦀 КРАБЫ! Ждите завершения осады.", reply_markup=menu())
-        return
-    if random.random() < 0.025:
-        if user[14] == 1:
-            cursor.execute("UPDATE users SET sword=0 WHERE id=?", (user_id,))
-            db.commit()
-            await query.message.edit_text(menu_text(get_user(user_id)) + "\n\n⚔️ ПАЛУНДРА! Крабы напали, но вы уничтожили их мечом!", reply_markup=menu())
-        else:
-            cursor.execute("UPDATE users SET crab_time=? WHERE id=?", (now + 1800, user_id))
-            db.commit()
-            await query.message.edit_text(menu_text(get_user(user_id)) + "\n\n🦀 ПАЛУНДРА! Крабы захватили салон на 30 минут!", reply_markup=menu())
+        await safe_edit(menu_text(user) + "\n\n🦀 КРАБЫ! Ждите завершения осады.")
         return
 
+    # Проверка на занятые ванны
     if user[4] is not None:
-        await query.message.edit_text(menu_text(user) + "\n\n⏳ Ванны заняты!", reply_markup=menu())
+        await safe_edit(menu_text(user) + "\n\n⏳ Ванны заняты!")
         return
 
     clients = []
@@ -393,6 +393,7 @@ if __name__ == "__main__":
 
     print("Бот успешно запущен!")
     app.run_polling()
+
 
 
 
